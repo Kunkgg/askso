@@ -1,8 +1,15 @@
+import os
+import sys
 import random
+import logging
+from datetime import date
+import textwrap
+import re
+import unicodedata
 
 from lxml import html
-
 import requests
+import click
 
 #Some User Agents
 user_agent=[
@@ -22,18 +29,29 @@ user_agent=[
     'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/61.0.3163.91 Safari/537.36'
     ]
 
-test_keywords = 'python decorator'
+logging.basicConfig(
+                format='%(asctime)s - %(levelname)s - %(message)s',
+                filename='log',
+                level=logging.INFO
+                            )
 
-"""
-sort_method:
-按相关度排序 relevance
-按最新回答时间排序 creation
-按投票数排序 votes
-按活跃程度排序 activity
-"""
 API_STACKEXCHANGE_SEARCH = 'http://api.stackexchange.com/2.2/search/advanced'
 SITE ='stackoverflow'
 stackoverflow_session = requests.session()
+terminal_size = os.get_terminal_size()
+text_width = int(terminal_size.columns*0.8)
+text_heigh = int(terminal_size.lines*0.9)
+#查找可能是代码的字符串，一合适的方式打印
+code_pattern = re.compile(r'\n[ ]{4,}')
+#生成translate字典,用于清理文本
+cmb_chrs = dict.fromkeys(
+    c for c in range(sys.maxunicode) if unicodedata.combining(chr(c))
+                        )
+
+def cleantext(text):
+     text = unicodedata.normalize('NFD',text)
+     text = text.translate(cmb_chrs)
+     return text
 
 def get_html(url,params=None):
     try:
@@ -43,85 +61,118 @@ def get_html(url,params=None):
                                 headers={'User-Agent':random.choice(user_agent)})
         res.raise_for_status()
     except requests.exceptions.Timeout:
-        print("**requests请求超时**")
+        logging.error("**requests请求超时**")
     except Exception:
-        print("**requests请求失败**")
+        logging.error("**requests请求失败**")
     else:
         return res
 
 def search_question(keywords,url=API_STACKEXCHANGE_SEARCH,search_list_size=10,
                     sort_method='relevance',site=SITE):
+    """
+    sort_method:
+    按相关度排序 relevance
+    按最新回答时间排序 creation
+    按投票数排序 votes
+    按活跃程度排序 activity
+    """
     params = {
             'page':1,
             'pagesize':search_list_size,
             'order':'desc',
             'sort':sort_method,
             'q':keywords,
+            'closed':False,
             'site':site
             }
-    return get_html(url,params=params).json()
-
+    logging.info('Search Keywords:{}'.format(keywords))
+    res = get_html(url,params=params)
+    return res.json()
 
 def get_questions_infos(search_res):
-    questions_infos = search_res.get('items',False)
+    questions_infos = search_res.get('items')
     if questions_infos:
         return questions_infos
     else:
-        print("**没有找到相关的问题结果**")
+        logging.info("**没有找到相关的问题结果**")
 
-def display_questions_info(questions_infos,display_limit=5):
-    print("\u2605"*100 + '\n\n')
+def display_questions_info(questions_infos,display_limit=10):
+    print("\u2605"*text_width)
     print(
-    "Found {} similar questions from site:{}.".format(len(questions_infos),SITE)
+    "The Top {} Similar Questions From Site:{}.".format(len(questions_infos),SITE)
         )
     print("Questions information is following:")
-    template_title = '|{0:^6}|{1:<64}|{2:^10}|{3:^10}|{4:^10}|'
-    print("-"*100 + '\n')
-    print(template_title.format('Num','Title','Score','Viewed','Answered'))
+    title_width = text_width*0.8 - 36
+    template_title = '|{0:^6}|{1:^' + str(title_width) + '}|{2:^10}|{3:^10}|{4:^10}|{5:^10}|'
+    template_line = '|{0:^6}|{1:<' + str(title_width) + '}|{2:^10}|{3:^10}|{4:^10}|{5:^10}|'
+    print("-"*text_width + '\n')
+    print(template_title.format('Num','Title','Score','Viewed','Answered','Creation_Date'))
     display_questions = (questions_infos if len(questions_infos) <= display_limit
                                             else questions_infos[:display_limit])
     num = 0
     for question in display_questions:
         num += 1
-        print("-"*100)
-        print(template_title.format(
+        creation_date = date.fromtimestamp(question.get('creation_date')).isoformat()
+        print("-"*text_width)
+        print(template_line.format(
                             num,
                             question.get('title'),
                             question.get('score'),
                             question.get('view_count'),
-                            question.get('answer_count')
+                            question.get('answer_count'),
+                            creation_date
                             )
             )
         print("\u2605 link:",question.get('link'))
 
 def choice_question():
-    choice_question_num = input("想看哪个提问的回答？")
-    return int(choice_question_num)
+    while True:
+        num = input('输入提问编号(1-10),查看对应回答;输入q退出:')
+        if num == 'q':
+            print('退出...')
+            break
+        else:
+            try:
+                if 1 <= int(num) <= 10:
+                    return int(num)
+                else:
+                    print('输入有误，请重新输入！')
+            except:
+                print('输入有误，请重新输入！')
 
 def get_question_link(questions_infos,choice_question_num):
     question_link = questions_infos[choice_question_num-1].get('link')
     if question_link:
         return question_link
     else:
-        print('查询失败')
+        logging.info('查询失败')
 
 def get_question_html(question_link):
     question_html = get_html(question_link).content
     if question_html:
         return question_html
     else:
-        print('查询失败')
+        logging.info('查询失败')
+
+def get_answers(question_html,answer_limit=5):
+    tree = html.fromstring(question_html)
+    answer_div_elements = tree.xpath(
+        '//div[@class="answer" or @class="answer accepted-answer"]//div[@class="post-text"]'
+        )
+    answer_div_elements = (answer_div_elements if len(answer_div_elements) <= answer_limit
+                                            else answer_div_elements[:answer_limit])
+    return [get_one_answer(answer_div) for answer_div in answer_div_elements]
 
 def get_one_answer(answer_div):
     try:
-        answer_text = '>'.join(answer_div.xpath('.//text()'))
+        answer_text = ''.join(answer_div.xpath('.//text()'))
     except Exception:
-        print('查询失败')
+        logging.info('查询失败')
         return False
     try:
         a_link_elements = answer_div.xpath('.//a[@href]')
         if a_link_elements:
-            a_link = [a.get('href') for a in a_link_elements]
+            a_link = [(a.text,a.get('href')) for a in a_link_elements]
         else:
             a_link = []
     except:
@@ -130,7 +181,6 @@ def get_one_answer(answer_div):
         code_elements = answer_div.xpath('.//code')
         if code_elements:
             code = [code.text for code in code_elements]
-            #print("TEST***codeis",code)
         else:
             code = []
     except:
@@ -141,139 +191,108 @@ def get_one_answer(answer_div):
             'code':code
             }
 
-def get_answers(question_html,answer_limit=3):
-    tree = html.fromstring(question_html)
-    answer_div_elements = tree.xpath(
-        '//div[@class="answer" or @class="answer accepted-answer"]//div[@class="post-text"]'
-        )
-    answer_div_elements = (answer_div_elements if len(answer_div_elements) <= answer_limit
-                                            else answer_div_elements[:answer_limit])
-    return [get_one_answer(answer_div) for answer_div in answer_div_elements]
-
 def print_one_answer(one_answer):
-    if one_answer.get('a_link'):
-        print("-"*100 + '\n')
-        print("\u2605"*10 + "Link In The Answer:")
-        for n,link in  enumerate(one_answer.get('a_link')):
-            print("\u2605"*3 + "Link{}:{}".format(n+1,link))
-        print("-"*100 + '\n\n')
-    if one_answer.get('answer_text'):
-        print("-"*100 + '\n')
+    answer_text = cleantext(one_answer.get('answer_text').strip())
+    a_link = one_answer.get('a_link')
+    code = [cleantext(c) for c in one_answer.get('code')]
+    if answer_text:
+        print("-"*text_width + '\n')
         print("\u2605"*10 + "Text In The Answer:")
-        print(one_answer.get('answer_text'))
-        print("-"*100 + '\n\n')
-    if one_answer.get('code'):
-        print("-"*100 + '\n')
-        print("\u2605"*10 + "CodeBlock In The Answer:")
-        for n,code in  enumerate(one_answer.get('code')):
-            print("\u2605"*3 + "CodeBlock:{}\n{}".format(n+1,code))
-            print("-"*100 + '\n')
-        print("-"*100 + '\n\n')
+        for line in answer_text.split('\n\n'):
+            if code_pattern.search(line):
+                print(line+'\n')
+            elif len(line) > text_width:
+                print(textwrap.fill(line+'\n',text_width))
+            else:
+                print(line+'\n')
+        print("-"*text_width + '\n\n')
+    while True:
+        if a_link:
+            print(
+                '该Answer中包含{}条链接，输入a查看链接详情:'
+                .format(len(a_link))
+                )
+        if code:
+            print(
+                '该Answer中包含{}个代码块，输入c查看代码块详情:'
+                .format(len(code))
+                )
+        control = input('如不需要查看链接和代码块详情，按其他任意键继续:')
+        if control == ('a' or 'A'):
+            print("-"*text_width + '\n')
+            print("\u2605"*10 + "Link In The Answer:")
+            for n,link in  enumerate(a_link):
+                print("\u2605"*3 + "{}.{}:{}".format(n+1,link[0],link[1]))
+            print("-"*text_width + '\n\n')
+        elif control == ('c' or 'C'):
+            print("-"*text_width + '\n')
+            print("\u2605"*10 + "CodeBlock In The Answer:")
+            for n,code in  enumerate(code):
+                print("\u2605"*3 + "CodeBlock:{}\n{}".format(n+1,code))
+                print("-"*text_width + '\n')
+            print("-"*text_width + '\n\n')
+        else:
+            break
+    print('该Answer显示完毕')
 
 def output_answers(answers):
     i = 0
-    flag = True
-    while flag:
+    while True:
         one_answer = answers[i]
         print("\u2605"*40 + "The Answer {}".format(i+1) + "\u2605"*40)
         print_one_answer(one_answer)
         while True:
-            gotowhere = input("输入n查看下一Answer，输入p查看上一Answer,输入q退出:")
-            if gotowhere == 'n':
+            if i == 0:
+                gotowhere = input("这是第一个Answer,输入n查看下一Answer,输入q退出,输入r返回提问选择:")
+            elif 0 < i < len(answers)-1:
+                gotowhere = input("输入n查看下一Answer,输入p查看上一Answer,输入q退出,输入r返回提问选择:")
+            elif i == len(answers)-1:
+                gotowhere = input("所有Answer已打印完毕,输入p查看上一Answer,输入q退出,输入r返回提问选择:")
+            else:
+                logging.error("Answer队列出错")
+
+            if gotowhere == ('n' or 'N'):
                 i += 1
-                if i < len(answers):
-                    break
-                else:
-                    print("所有Answer已打印完毕，自动退出程序!")
-                    flag = False
-                    break
-            elif gotowhere == 'p':
-                i -= 1
-                if i >= 0:
-                    break
-                else:
-                    print("现在已经是第一个Answer了，不能再往前了！")
-                    i = 0
-                    break
-            elif gotowhere == 'q':
-                print("退出～")
-                flag = False
                 break
+            elif gotowhere == ('p' or 'P'):
+                i -= 1
+                break
+            elif gotowhere == ('q' or 'Q'):
+                print("退出...再见:)")
+                return None
+            elif gotowhere == ('r' or 'R'):
+                print("返回提问选择...")
+                return "Trun Back Questions List"
             else:
                 continue
 
-def test_run():
-    questions_infos = get_questions_infos(search_question(test_keywords))
-
-    display_questions_info(questions_infos)
-    choice_question_num = choice_question()
-    question_link = get_question_link(questions_infos,choice_question_num)
-    question_html = get_question_html(question_link)
-    answers = get_answers(question_html)
-    output_answers(answers)
+@click.command()
+@click.option('--searchlistsize',default=10,help='搜索多少个与关键字相关性最高的提问，default=10')
+@click.option('--queslistsize',default=10,help='显示多少个与关键字相关性最高的提问，default=5')
+@click.option('--answerlistsize',default=5,help='显示关于某个提问投票得分前多少名的回答，default=5')
+@click.argument('keywords')
+def cli_runner(searchlistsize,queslistsize,answerlistsize,keywords):
+    """命令行查询stackoverflow"""
+    questions_infos = get_questions_infos(
+                search_question(
+                        keywords,
+                        search_list_size=searchlistsize
+                        )
+                                    )
+    while True:
+        display_questions_info(questions_infos,display_limit=queslistsize)
+        choice_question_num = choice_question()
+        if choice_question_num:
+            question_link = get_question_link(questions_infos,choice_question_num)
+            question_html = get_question_html(question_link)
+            answers = get_answers(question_html,answer_limit=answerlistsize)
+            if output_answers(answers):
+                continue
+            else:
+                break
+        else:
+            break
     stackoverflow_session.close()
 
-def get_parser():
-    """
-    命令行功能实现
-    parser = argparse.ArgumentParser(description='instant coding answers via the command line')
-    parser.add_argument('query', metavar='QUERY', type=str, nargs='*',
-                        help='the question to answer')
-    parser.add_argument('-p', '--pos', help='select answer in specified position (default: 1)', default=1, type=int)
-    parser.add_argument('-a', '--all', help='display the full text of the answer',
-                        action='store_true')
-    parser.add_argument('-l', '--link', help='display only the answer link',
-                        action='store_true')
-    parser.add_argument('-c', '--color', help='enable colorized output',
-                        action='store_true')
-    parser.add_argument('-n', '--num-answers', help='number of answers to return', default=1, type=int)
-    parser.add_argument('-C', '--clear-cache', help='clear the cache',
-                        action='store_true')
-    parser.add_argument('-v', '--version', help='displays the current version of howdoi',
-                        action='store_true')
-    return parser
-    """
-    pass
-
-def command_line_runner():
-    """
-    命令行执行逻辑
-    """
-    """
-    #解析参数
-    parser = get_parser()
-    args = vars(parser.parse_args())
-
-    if args['version']:
-        print(__version__)
-        return
-
-    if args['clear_cache']:
-        _clear_cache()
-        print('Cache cleared successfully')
-        return
-    #如果参数输入为空，打印帮助信息
-    if not args['query']:
-        parser.print_help()
-        return
-
-    # enable the cache if user doesn't want it to be disabled
-    if not os.getenv('HOWDOI_DISABLE_CACHE'):
-        _enable_cache()
-
-    if os.getenv('HOWDOI_COLORIZE'):
-        args['color'] = True
-    #调要howdoi函数
-    utf8_result = howdoi(args).encode('utf-8', 'ignore')
-    if sys.version < '3':
-        print(utf8_result)
-    else:
-        # Write UTF-8 to stdout: https://stackoverflow.com/a/3603160
-        sys.stdout.buffer.write(utf8_result)
-    # close the session to release connection
-    howdoi_session.close()
-    """
-    pass
-
 if __name__ == '__main__':
-    test_run()
+    cli_runner()
