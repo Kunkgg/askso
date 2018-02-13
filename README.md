@@ -10,7 +10,7 @@
 
 # 安装
 
-1. 克隆github仓库: `git clone `
+1. 克隆github仓库: `git clone https://github.com/Kunkgg/askso.git`
 2. 安装：`python setup.py install`
 
 ---
