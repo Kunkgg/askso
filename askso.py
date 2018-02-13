@@ -10,6 +10,7 @@ import unicodedata
 from lxml import html
 import requests
 import click
+import colorama
 
 #Some User Agents
 user_agent=[
@@ -39,6 +40,7 @@ API_STACKEXCHANGE_SEARCH = 'http://api.stackexchange.com/2.2/search/advanced'
 SITE ='stackoverflow'
 stackoverflow_session = requests.session()
 terminal_size = os.get_terminal_size()
+#显示终端尺寸
 text_width = int(terminal_size.columns*0.8)
 text_heigh = int(terminal_size.lines*0.9)
 #查找可能是代码的字符串，一合适的方式打印
@@ -96,49 +98,66 @@ def get_questions_infos(search_res):
     else:
         logging.info("**没有找到相关的问题结果**")
 
+def seg_mlines(texts,linelenth):
+    mline_texts = []
+    while len(texts) > linelenth:
+        mline_texts.append(texts[:linelenth])
+        texts = texts[linelenth:]
+    if len(texts) <= linelenth:
+        mline_texts.append(texts)
+    return mline_texts
+
+def print_one_question(question,num,indents=8):
+    title_width = int(text_width*0.8 - 36)
+    template_line = '|{0:^6}|{1:<' + str(title_width) + '}|{2:^10}|{3:^10}|{4:^10}|{5:^10}|'
+    creation_date = date.fromtimestamp(question.get('creation_date')).isoformat()
+    title = seg_mlines(question.get('title'),title_width)
+    print("-"*text_width)
+    print_blue(template_line.format(
+                        num,
+                        title[0],
+                        question.get('score'),
+                        question.get('view_count'),
+                        question.get('answer_count'),
+                        creation_date
+                        )
+        )
+    if title[1:]:
+        for line in title[1:]:
+            print_blue(' '*indents + '{}'.format(line))
+    print_fail("\u2605 link:{}".format(question.get('link')))
+
 def display_questions_info(questions_infos,display_limit=10):
     print("\u2605"*text_width)
-    print(
+    print_header(
     "The Top {} Similar Questions From Site:{}.".format(len(questions_infos),SITE)
         )
-    print("Questions information is following:")
+    print_header("Questions information is following:")
     title_width = text_width*0.8 - 36
     template_title = '|{0:^6}|{1:^' + str(title_width) + '}|{2:^10}|{3:^10}|{4:^10}|{5:^10}|'
-    template_line = '|{0:^6}|{1:<' + str(title_width) + '}|{2:^10}|{3:^10}|{4:^10}|{5:^10}|'
     print("-"*text_width + '\n')
-    print(template_title.format('Num','Title','Score','Viewed','Answered','Creation_Date'))
+    print_blue(template_title.format('Num','Title','Score','Viewed','Answered','Creation_Date'))
     display_questions = (questions_infos if len(questions_infos) <= display_limit
                                             else questions_infos[:display_limit])
     num = 0
     for question in display_questions:
         num += 1
-        creation_date = date.fromtimestamp(question.get('creation_date')).isoformat()
-        print("-"*text_width)
-        print(template_line.format(
-                            num,
-                            question.get('title'),
-                            question.get('score'),
-                            question.get('view_count'),
-                            question.get('answer_count'),
-                            creation_date
-                            )
-            )
-        print("\u2605 link:",question.get('link'))
+        print_one_question(question,num)
 
 def choice_question():
     while True:
-        num = input('输入提问编号(1-10),查看对应回答;输入q退出:')
+        num = input(make_warning('输入提问编号(1-10),查看对应回答;输入q退出:'))
         if num == 'q':
-            print('退出...')
+            print_warning('退出...')
             break
         else:
             try:
                 if 1 <= int(num) <= 10:
                     return int(num)
                 else:
-                    print('输入有误，请重新输入！')
+                    print_warning('输入有误，请重新输入！')
             except:
-                print('输入有误，请重新输入！')
+                print_warning('输入有误，请重新输入！')
 
 def get_question_link(questions_infos,choice_question_num):
     question_link = questions_infos[choice_question_num-1].get('link')
@@ -150,6 +169,7 @@ def get_question_link(questions_infos,choice_question_num):
 def get_question_html(question_link):
     question_html = get_html(question_link).content
     if question_html:
+        logging.info('Open Question Link:{}'.format(question_link))
         return question_html
     else:
         logging.info('查询失败')
@@ -197,57 +217,69 @@ def print_one_answer(one_answer):
     code = [cleantext(c) for c in one_answer.get('code')]
     if answer_text:
         print("-"*text_width + '\n')
-        print("\u2605"*10 + "Text In The Answer:")
+        print_header("\u2605"*10 + "Text In The Answer:")
         for line in answer_text.split('\n\n'):
             if code_pattern.search(line):
-                print(line+'\n')
+                print_green(line+'\n')
             elif len(line) > text_width:
-                print(textwrap.fill(line+'\n',text_width))
+                print_blue(textwrap.fill(line+'\n',text_width))
             else:
-                print(line+'\n')
+                print_blue(line+'\n')
         print("-"*text_width + '\n\n')
     while True:
         if a_link:
-            print(
+            print_warning(
                 '该Answer中包含{}条链接，输入a查看链接详情:'
                 .format(len(a_link))
                 )
         if code:
-            print(
+            print_warning(
                 '该Answer中包含{}个代码块，输入c查看代码块详情:'
                 .format(len(code))
                 )
-        control = input('如不需要查看链接和代码块详情，按其他任意键继续:')
-        if control == ('a' or 'A'):
+        control = input(make_warning('如不需要查看链接和代码块详情，按其他任意键继续:'))
+        if control in {'a','A'}:
             print("-"*text_width + '\n')
-            print("\u2605"*10 + "Link In The Answer:")
+            print_header("\u2605"*10 + "Link In The Answer:")
             for n,link in  enumerate(a_link):
-                print("\u2605"*3 + "{}.{}:{}".format(n+1,link[0],link[1]))
+                print_fail("\u2605"*3 + "{}.{}:{}".format(n+1,link[0],link[1]))
             print("-"*text_width + '\n\n')
-        elif control == ('c' or 'C'):
+        elif control in {'c','C'}:
             print("-"*text_width + '\n')
-            print("\u2605"*10 + "CodeBlock In The Answer:")
+            print_header("\u2605"*10 + "CodeBlock In The Answer:")
             for n,code in  enumerate(code):
-                print("\u2605"*3 + "CodeBlock:{}\n{}".format(n+1,code))
+                print_green("\u2605"*3 + "CodeBlock:{}\n{}".format(n+1,code))
                 print("-"*text_width + '\n')
             print("-"*text_width + '\n\n')
         else:
             break
-    print('该Answer显示完毕')
+    print_warning('该Answer显示完毕')
 
 def output_answers(answers):
     i = 0
     while True:
         one_answer = answers[i]
-        print("\u2605"*40 + "The Answer {}".format(i+1) + "\u2605"*40)
+        print_header("\u2605"*(int(text_width/2-10)) + "The Answer {}".format(i+1) + "\u2605"*(int(text_width/2-10)))
         print_one_answer(one_answer)
         while True:
             if i == 0:
-                gotowhere = input("这是第一个Answer,输入n查看下一Answer,输入q退出,输入r返回提问选择:")
+                gotowhere = input(
+                make_warning("这是第一个Answer,输入n查看下一Answer,输入q退出,输入r返回提问选择:")
+                                )
+                if not (gotowhere in {'n','N','q','Q','r','R'}):
+                    continue
             elif 0 < i < len(answers)-1:
-                gotowhere = input("输入n查看下一Answer,输入p查看上一Answer,输入q退出,输入r返回提问选择:")
+                gotowhere = input(
+                make_warning("输入n查看下一Answer,输入p查看上一Answer,输入q退出,输入r返回提问选择:")
+                                )
+                if not (gotowhere in {'n','N','p','P','q','Q','r','R'}):
+                    continue
             elif i == len(answers)-1:
-                gotowhere = input("所有Answer已打印完毕,输入p查看上一Answer,输入q退出,输入r返回提问选择:")
+                gotowhere = input(
+                make_warning("所有Answer已打印完毕,输入p查看上一Answer,输入q退出,输入r返回提问选择:")
+                                )
+                if not (gotowhere in {'p','P','q','Q','r','R'}):
+                    continue
             else:
                 logging.error("Answer队列出错")
 
@@ -258,21 +290,24 @@ def output_answers(answers):
                 i -= 1
                 break
             elif gotowhere == ('q' or 'Q'):
-                print("退出...再见:)")
+                print_warning("退出...再见:)")
                 return None
             elif gotowhere == ('r' or 'R'):
-                print("返回提问选择...")
+                print_warning("返回提问选择...")
                 return "Trun Back Questions List"
             else:
                 continue
 
 @click.command()
-@click.option('--searchlistsize',default=10,help='搜索多少个与关键字相关性最高的提问，default=10')
-@click.option('--queslistsize',default=10,help='显示多少个与关键字相关性最高的提问，default=5')
-@click.option('--answerlistsize',default=5,help='显示关于某个提问投票得分前多少名的回答，default=5')
+@click.option('--searchlistsize',default=10,
+            help='搜索多少个与关键字相关性最高的提问，default=10')
+@click.option('--queslistsize',default=10,
+            help='显示多少个与关键字相关性最高的提问，default=10')
+@click.option('--answerlistsize',default=5,
+            help='解析关于某个提问投票得分前多少名的回答，default=5')
 @click.argument('keywords')
 def cli_runner(searchlistsize,queslistsize,answerlistsize,keywords):
-    """命令行查询stackoverflow"""
+    make_header("""命令行查询stackoverflow""")
     questions_infos = get_questions_infos(
                 search_question(
                         keywords,
@@ -293,6 +328,45 @@ def cli_runner(searchlistsize,queslistsize,answerlistsize,keywords):
         else:
             break
     stackoverflow_session.close()
+
+def format_str(str, color):
+    return "{0}{1}{2}".format(color, str, colorama.Style.RESET_ALL)
+
+def print_header(str):
+    print(format_str(str, colorama.Fore.MAGENTA))
+
+def print_blue(str):
+    print(format_str(str, colorama.Fore.BLUE))
+
+def print_green(str):
+    print(format_str(str, colorama.Fore.GREEN))
+
+def print_warning(str):
+    print(format_str(str, colorama.Fore.YELLOW))
+
+def print_fail(str):
+    print(format_str(str, colorama.Fore.RED))
+
+def print_white(str):
+    print(format_str(str, colorama.Fore.WHITE))
+
+def make_header(str):
+    return format_str(str, colorama.Fore.MAGENTA)
+
+def make_blue(str):
+    return format_str(str, colorama.Fore.BLUE)
+
+def make_green(str):
+    return format_str(str, colorama.Fore.GREEN)
+
+def make_warning(str):
+    return format_str(str, colorama.Fore.YELLOW)
+
+def make_fail(str):
+    return format_str(str, colorama.Fore.RED)
+
+def make_white(str):
+    return format_str(str, colorama.Fore.WHITE)
 
 if __name__ == '__main__':
     cli_runner()
